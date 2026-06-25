@@ -63,11 +63,10 @@ jobs:
       - name: Configure defconfig + DISABLE check_defconfig
         run: |
           cd $HOME/android-kernel
-          # neutralise the strict savedefconfig check WITHOUT leaving a dangling && in POST_DEFCONFIG_CMDS
-          for bc in $(grep -rl check_defconfig . 2>/dev/null); do
-            sed -i -E 's/check_defconfig[[:space:]]*&&[[:space:]]*//g; s/[[:space:]]*&&[[:space:]]*check_defconfig//g; s/\bcheck_defconfig\b/true/g' "$bc"
-            echo "patched $bc:"; grep -nE "POST_DEFCONFIG_CMDS" "$bc" || true
-          done
+          # bulletproof: kill the whole 'eval ${POST_DEFCONFIG_CMDS}' line in build.sh (it ran check_defconfig && update_config and aborted)
+          echo "before:"; grep -nE "eval .*POST_DEFCONFIG_CMDS" build/build.sh || true
+          sed -i '/eval .*POST_DEFCONFIG_CMDS/c\POST_DEFCONFIG_CMDS=true' build/build.sh
+          echo "after:"; grep -nE "POST_DEFCONFIG_CMDS" build/build.sh | head
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
           for c in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_SUS_PATH=y CONFIG_KSU_SUSFS_SUS_MOUNT=y \
                    CONFIG_KSU_SUSFS_TRY_UMOUNT=y CONFIG_KSU_SUSFS_SPOOF_UNAME=y CONFIG_KSU_SUSFS_SUS_KSTAT=y \
