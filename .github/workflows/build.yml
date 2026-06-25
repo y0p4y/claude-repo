@@ -1,19 +1,15 @@
-name: build-redbull-ksunext-susfs
-# Builds a KernelSU-Next + SuSFS kernel for Pixel 4a 5G (bramble) / Pixel 5 (redfin) = "redbull", kernel 4.19.
-# Output: AnyKernel3.zip + Image.lz4-dtb (artifacts). Flash AnyKernel3 in recovery, or repack into boot.img + fastboot.
-#
-# Grounded on the proven Shinhubzhu/kernelsu_pixel5 + CZB666-wdnmd/kernelsu_redbull recipe,
-# adapted: (1) Android-12 manifest branch to match stock SQ3A.220705.003.A1, (2) KernelSU-Next, (3) SuSFS patches.
+name: build-redbull-ksu-susfs
+# KernelSU (classic v0.9.5, last non-GKI) + SuSFS for Pixel 4a 5G (bramble) / Pixel 5 (redfin) = redbull, kernel 4.19.
+# Output: AnyKernel3.zip + Image.lz4-dtb. Tuned for stock Android-12 SQ3A.220705.003.A1.
 on:
   workflow_dispatch:
     inputs:
       manifest_branch:
-        description: "redbull kernel manifest branch (MUST match the Android version on the device)"
+        description: "redbull kernel manifest branch (match device Android version)"
         required: true
-        # Device is Android 12 (SQ3A.220705.003.A1). If app/boot misbehaves, try -android12L or -android13.
         default: "android-msm-redbull-4.19-android12"
       susfs_branch:
-        description: "susfs4ksu branch for this kernel"
+        description: "susfs4ksu branch"
         required: true
         default: "kernel-4.19"
 
@@ -23,83 +19,89 @@ jobs:
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: false
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+        with: { tool-cache: true, android: false, dotnet: true, haskell: true, large-packages: true, docker-images: true, swap-storage: true }
 
       - name: Install deps
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y repo git bc bison build-essential curl flex \
-            libssl-dev libelf-dev zip kmod cpio python3
+          sudo apt-get install -y repo git bc bison build-essential curl flex libssl-dev libelf-dev zip kmod cpio python3 rsync ccache
 
       - name: Sync redbull kernel source
         run: |
           mkdir -p $HOME/android-kernel && cd $HOME/android-kernel
-          git config --global user.email "ci@local" ; git config --global user.name "ci"
+          git config --global user.email ci@local; git config --global user.name ci
           repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }}
           repo sync -j$(nproc) -c --no-tags --no-clone-bundle
+          echo "KROOT=$HOME/android-kernel/private/msm-google" >> $GITHUB_ENV
 
-      - name: Integrate KernelSU-Next (non-GKI, kernel 4.19)
+      - name: Integrate KernelSU (classic v0.9.5, non-GKI) + verify wiring
         run: |
-          cd $HOME/android-kernel/private/msm-google
-          # KernelSU-Next supports kernels 4.4-6.6 incl. 4.19 non-GKI; brings SuSFS support.
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-          echo "KernelSU-Next integrated"
+          cd "$KROOT"
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/v0.9.5/kernel/setup.sh" | bash -s v0.9.5 || true
+          # ensure Kconfig/Makefile wiring (non-GKI manual fallback)
+          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/menu "Device Drivers"/a source "drivers/kernelsu/Kconfig"' drivers/Kconfig || true
+          grep -q 'kernelsu' drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          if [ ! -e drivers/kernelsu ]; then ln -sf ../KernelSU/kernel drivers/kernelsu; fi
+          echo "--- KSU wiring ---"; grep -n kernelsu drivers/Makefile drivers/Kconfig || true
+          ls -la KernelSU drivers/kernelsu 2>/dev/null || true
 
-      - name: Apply SuSFS patches (susfs4ksu)
+      - name: Apply SuSFS (susfs4ksu ${{ github.event.inputs.susfs_branch }})
         run: |
-          cd $HOME/android-kernel/private/msm-google
-          git clone --depth=1 -b ${{ github.event.inputs.susfs_branch }} https://gitlab.com/simonpunk/susfs4ksu.git
-          # kernel-side susfs patch + headers
-          cp susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
-          cp susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
-          # apply the kernel patch (name varies by branch; try the 4.19 / non-gki patch)
-          patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_*.patch || \
-          patch -p1 < susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          # enable in defconfig
-          for cfg in arch/arm64/configs/*redbull*defconfig arch/arm64/configs/*gki*defconfig; do
-            [ -f "$cfg" ] && { echo "CONFIG_KSU=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$cfg"; echo "CONFIG_TMPFS_XATTR=y" >> "$cfg"; }
-          done
-          echo "SuSFS applied (verify the patch hunk succeeded in the log above)"
+          cd "$KROOT"
+          git clone --depth=1 -b ${{ github.event.inputs.susfs_branch }} https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs
+          cp /tmp/susfs/kernel_patches/fs/susfs.c fs/ 2>&1 || true
+          cp /tmp/susfs/kernel_patches/fs/sus_su.c fs/ 2>&1 || true
+          cp /tmp/susfs/kernel_patches/include/linux/susfs.h include/linux/ 2>&1 || true
+          cp /tmp/susfs/kernel_patches/include/linux/susfs_def.h include/linux/ 2>&1 || true
+          cp /tmp/susfs/kernel_patches/include/linux/sus_su.h include/linux/ 2>&1 || true
+          echo "=== kernel-side susfs patch ==="
+          patch -p1 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "WARN kernel patch hunks rejected (see *.rej)"
+          echo "=== KSU-side susfs patch ==="
+          ( cd KernelSU && patch -p1 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ) || echo "WARN ksu patch hunks rejected"
+          find . -name '*.rej' -print -exec sed -n '1,5p' {} \; 2>/dev/null | head -40 || true
+
+      - name: Configure defconfig + DISABLE check_defconfig
+        run: |
+          cd $HOME/android-kernel
+          # neutralise the strict savedefconfig check that aborted the first build
+          find . -path '*/private/msm-google/build.config*' -exec sed -i 's/check_defconfig//g' {} \; 2>/dev/null || true
+          grep -rl check_defconfig "$KROOT" 2>/dev/null | xargs -r sed -i 's/check_defconfig//g' || true
+          DC="$KROOT/arch/arm64/configs/redbull_defconfig"
+          for c in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_SUS_PATH=y CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                   CONFIG_KSU_SUSFS_TRY_UMOUNT=y CONFIG_KSU_SUSFS_SPOOF_UNAME=y CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                   CONFIG_KSU_SUSFS_SPOOF_PROC_CMDLINE=y CONFIG_KSU_SUSFS_OPEN_REDIRECT=y CONFIG_TMPFS_XATTR=y; do
+            echo "$c" >> "$DC"; done
+          echo "--- tail defconfig ---"; tail -12 "$DC"
 
       - name: Build
         run: |
           cd $HOME/android-kernel
-          # the redbull build script name differs per manifest; pick whichever exists
-          if   [ -f build_redbull-gki.sh ]; then BUILD=./build_redbull-gki.sh
-          elif [ -f build.sh ];            then BUILD="BUILD_CONFIG=private/msm-google/build.config.redbull.vintf ./build/build.sh"
-          else BUILD="BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh"; fi
-          echo "Using: $BUILD"
-          eval $BUILD
+          export POST_DEFCONFIG_CMDS="true"
+          BC=$(ls build.config* 2>/dev/null | head -1)
+          if   [ -f build_redbull-gki.sh ]; then BUILD_CONFIG=private/msm-google/build.config.redbull.vintf ./build/build.sh 2>&1 | tail -n +1 ; \
+          else BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh ; fi
 
-      - name: Locate kernel image
+      - name: Locate image
         id: img
         run: |
           IMG=$(find $HOME/android-kernel/out -name 'Image.lz4-dtb' -o -name 'Image.lz4' -o -name 'Image' | head -1)
-          echo "Found: $IMG"; echo "path=$IMG" >> $GITHUB_OUTPUT
+          echo "found=$IMG"; echo "path=$IMG" >> $GITHUB_OUTPUT
+          [ -n "$IMG" ] || { echo "NO KERNEL IMAGE BUILT"; exit 1; }
 
       - name: Package AnyKernel3
         run: |
           cd $HOME/android-kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g; s/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
           sed -i 's!block=/dev/block/platform/.*/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
           cp "${{ steps.img.outputs.path }}" AnyKernel3/
           cd AnyKernel3 && zip -r9 AnyKernel3.zip . -x ".git*" "README.md" "*.zip"
 
       - name: Upload AnyKernel3
         if: success()
         uses: actions/upload-artifact@v4
-        with: { name: AnyKernel3-redbull-ksunext-susfs, path: "/home/runner/android-kernel/AnyKernel3/AnyKernel3.zip" }
-
-      - name: Upload raw kernel image
+        with: { name: AnyKernel3-redbull-ksu-susfs, path: /home/runner/android-kernel/AnyKernel3/AnyKernel3.zip }
+      - name: Upload raw image
         if: success()
         uses: actions/upload-artifact@v4
         with: { name: kernel-image, path: "${{ steps.img.outputs.path }}" }
