@@ -63,9 +63,11 @@ jobs:
       - name: Configure defconfig + DISABLE check_defconfig
         run: |
           cd $HOME/android-kernel
-          # neutralise the strict savedefconfig check that aborted the first build
-          find . -path '*/private/msm-google/build.config*' -exec sed -i 's/check_defconfig//g' {} \; 2>/dev/null || true
-          grep -rl check_defconfig "$KROOT" 2>/dev/null | xargs -r sed -i 's/check_defconfig//g' || true
+          # neutralise the strict savedefconfig check WITHOUT leaving a dangling && in POST_DEFCONFIG_CMDS
+          for bc in $(grep -rl check_defconfig . 2>/dev/null); do
+            sed -i -E 's/check_defconfig[[:space:]]*&&[[:space:]]*//g; s/[[:space:]]*&&[[:space:]]*check_defconfig//g; s/\bcheck_defconfig\b/true/g' "$bc"
+            echo "patched $bc:"; grep -nE "POST_DEFCONFIG_CMDS" "$bc" || true
+          done
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
           for c in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_SUS_PATH=y CONFIG_KSU_SUSFS_SUS_MOUNT=y \
                    CONFIG_KSU_SUSFS_TRY_UMOUNT=y CONFIG_KSU_SUSFS_SPOOF_UNAME=y CONFIG_KSU_SUSFS_SUS_KSTAT=y \
@@ -76,10 +78,7 @@ jobs:
       - name: Build
         run: |
           cd $HOME/android-kernel
-          export POST_DEFCONFIG_CMDS="true"
-          BC=$(ls build.config* 2>/dev/null | head -1)
-          if   [ -f build_redbull-gki.sh ]; then BUILD_CONFIG=private/msm-google/build.config.redbull.vintf ./build/build.sh 2>&1 | tail -n +1 ; \
-          else BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh ; fi
+          BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh
 
       - name: Locate image
         id: img
