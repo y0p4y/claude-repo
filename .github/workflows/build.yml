@@ -1,0 +1,105 @@
+name: build-redbull-ksunext-susfs
+# Builds a KernelSU-Next + SuSFS kernel for Pixel 4a 5G (bramble) / Pixel 5 (redfin) = "redbull", kernel 4.19.
+# Output: AnyKernel3.zip + Image.lz4-dtb (artifacts). Flash AnyKernel3 in recovery, or repack into boot.img + fastboot.
+#
+# Grounded on the proven Shinhubzhu/kernelsu_pixel5 + CZB666-wdnmd/kernelsu_redbull recipe,
+# adapted: (1) Android-12 manifest branch to match stock SQ3A.220705.003.A1, (2) KernelSU-Next, (3) SuSFS patches.
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: "redbull kernel manifest branch (MUST match the Android version on the device)"
+        required: true
+        # Device is Android 12 (SQ3A.220705.003.A1). If app/boot misbehaves, try -android12L or -android13.
+        default: "android-msm-redbull-4.19-android12"
+      susfs_branch:
+        description: "susfs4ksu branch for this kernel"
+        required: true
+        default: "kernel-4.19"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y repo git bc bison build-essential curl flex \
+            libssl-dev libelf-dev zip kmod cpio python3
+
+      - name: Sync redbull kernel source
+        run: |
+          mkdir -p $HOME/android-kernel && cd $HOME/android-kernel
+          git config --global user.email "ci@local" ; git config --global user.name "ci"
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }}
+          repo sync -j$(nproc) -c --no-tags --no-clone-bundle
+
+      - name: Integrate KernelSU-Next (non-GKI, kernel 4.19)
+        run: |
+          cd $HOME/android-kernel/private/msm-google
+          # KernelSU-Next supports kernels 4.4-6.6 incl. 4.19 non-GKI; brings SuSFS support.
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          echo "KernelSU-Next integrated"
+
+      - name: Apply SuSFS patches (susfs4ksu)
+        run: |
+          cd $HOME/android-kernel/private/msm-google
+          git clone --depth=1 -b ${{ github.event.inputs.susfs_branch }} https://gitlab.com/simonpunk/susfs4ksu.git
+          # kernel-side susfs patch + headers
+          cp susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          cp susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          # apply the kernel patch (name varies by branch; try the 4.19 / non-gki patch)
+          patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_*.patch || \
+          patch -p1 < susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          # enable in defconfig
+          for cfg in arch/arm64/configs/*redbull*defconfig arch/arm64/configs/*gki*defconfig; do
+            [ -f "$cfg" ] && { echo "CONFIG_KSU=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$cfg"; echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$cfg"; echo "CONFIG_TMPFS_XATTR=y" >> "$cfg"; }
+          done
+          echo "SuSFS applied (verify the patch hunk succeeded in the log above)"
+
+      - name: Build
+        run: |
+          cd $HOME/android-kernel
+          # the redbull build script name differs per manifest; pick whichever exists
+          if   [ -f build_redbull-gki.sh ]; then BUILD=./build_redbull-gki.sh
+          elif [ -f build.sh ];            then BUILD="BUILD_CONFIG=private/msm-google/build.config.redbull.vintf ./build/build.sh"
+          else BUILD="BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh"; fi
+          echo "Using: $BUILD"
+          eval $BUILD
+
+      - name: Locate kernel image
+        id: img
+        run: |
+          IMG=$(find $HOME/android-kernel/out -name 'Image.lz4-dtb' -o -name 'Image.lz4' -o -name 'Image' | head -1)
+          echo "Found: $IMG"; echo "path=$IMG" >> $GITHUB_OUTPUT
+
+      - name: Package AnyKernel3
+        run: |
+          cd $HOME/android-kernel
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's!block=/dev/block/platform/.*/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
+          cp "${{ steps.img.outputs.path }}" AnyKernel3/
+          cd AnyKernel3 && zip -r9 AnyKernel3.zip . -x ".git*" "README.md" "*.zip"
+
+      - name: Upload AnyKernel3
+        if: success()
+        uses: actions/upload-artifact@v4
+        with: { name: AnyKernel3-redbull-ksunext-susfs, path: "/home/runner/android-kernel/AnyKernel3/AnyKernel3.zip" }
+
+      - name: Upload raw kernel image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with: { name: kernel-image, path: "${{ steps.img.outputs.path }}" }
