@@ -54,10 +54,11 @@ jobs:
           cp /tmp/susfs/kernel_patches/include/linux/susfs.h include/linux/ 2>&1 || true
           cp /tmp/susfs/kernel_patches/include/linux/susfs_def.h include/linux/ 2>&1 || true
           cp /tmp/susfs/kernel_patches/include/linux/sus_su.h include/linux/ 2>&1 || true
-          echo "=== kernel-side susfs patch ==="
-          patch -p1 -F3 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "WARN kernel patch hunks rejected (see *.rej)"
+          echo "=== kernel-side susfs patch (no fuzz: let incompatible hunks reject cleanly -> stock files compile) ==="
+          patch -p1 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "WARN kernel patch hunks rejected (see *.rej)"
           echo "=== KSU-side susfs patch ==="
-          ( cd KernelSU && patch -p1 -F3 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ) || echo "WARN ksu patch hunks rejected"
+          ( cd KernelSU && patch -p1 --no-backup-if-mismatch < /tmp/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ) || echo "WARN ksu patch hunks rejected"
+          echo "=== rejected hunks (left as partial = compiles, per build 4) ==="; find . -name '*.rej' || true
           find . -name '*.rej' -print -exec sed -n '1,5p' {} \; 2>/dev/null | head -40 || true
 
       - name: Configure defconfig + DISABLE check_defconfig
