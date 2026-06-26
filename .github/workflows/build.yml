@@ -72,12 +72,11 @@ jobs:
           cd $HOME/android-kernel
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
           # (KMI/ABI post-build compare is tolerated via continue-on-error on the Build step; image is produced before it runs)
-          # disable LTO properly (it's a kconfig choice) to avoid OOM at vmlinux link
-          sed -i 's/^CONFIG_LTO_CLANG=y/# CONFIG_LTO_CLANG is not set/' "$DC"
-          sed -i 's/^CONFIG_LTO=y/# CONFIG_LTO is not set/' "$DC"
-          sed -i 's/^CONFIG_THINLTO=y/# CONFIG_THINLTO is not set/' "$DC"
-          { echo "# CONFIG_LTO_CLANG is not set"; echo "# CONFIG_THINLTO is not set"; echo "CONFIG_LTO_NONE=y"; } >> "$DC"
-          echo "--- LTO config lines ---"; grep -nE "LTO|THINLTO" "$DC" || true
+          # Use THIN LTO (not none): keeps CFI/KMI intact so stock vendor modules load (device BOOTS),
+          # while using far less RAM than full LTO (which OOM'd the runner). Full-LTO -> Thin-LTO.
+          sed -i 's/^CONFIG_LTO_CLANG_FULL=y/# CONFIG_LTO_CLANG_FULL is not set/' "$DC"
+          { echo "CONFIG_LTO_CLANG=y"; echo "CONFIG_THINLTO=y"; echo "CONFIG_LTO_CLANG_THIN=y"; echo "CONFIG_CFI_CLANG=y"; } >> "$DC"
+          echo "--- LTO/CFI config lines ---"; grep -nE "LTO|THINLTO|CFI" "$DC" || true
           # bulletproof: kill the whole 'eval ${POST_DEFCONFIG_CMDS}' line in build.sh (it ran check_defconfig && update_config and aborted)
           echo "before:"; grep -nE "eval .*POST_DEFCONFIG_CMDS" build/build.sh || true
           sed -i '/eval .*POST_DEFCONFIG_CMDS/c\POST_DEFCONFIG_CMDS=true' build/build.sh
@@ -93,7 +92,7 @@ jobs:
         continue-on-error: true
         run: |
           cd $HOME/android-kernel
-          export LTO=none
+          export LTO=thin
           BUILD_CONFIG=private/msm-google/build.config.redbull.vintf build/build.sh
 
       - name: Locate image
