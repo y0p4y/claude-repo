@@ -61,55 +61,9 @@ jobs:
           echo "=== verify susfs selinux definitions present ==="
           grep -rn "susfs_set_ksu_sid\|susfs_is_current_ksu_domain" KernelSU/kernel/selinux/ | head || echo "MISSING susfs selinux defs"
           echo "=== rejected hunks ==="; find . -name '*.rej' || true
-          # KSU v0.9.5 selinux.c uses old fn names -> susfs selinux defs hunk rejects.
-          # Inject the susfs sid/domain DEFINITIONS directly (use only stable APIs present in v0.9.5).
+          # KSU v0.9.5 selinux.c uses old fn names -> susfs selinux defs hunk rejects. Inject defs via base64 (no heredoc -> valid YAML).
           SX=KernelSU/kernel/selinux/selinux.c
-          if ! grep -q 'susfs_set_ksu_sid' "$SX"; then
-            echo "injecting susfs selinux defs into $SX"
-            cat >> "$SX" <<'EOF'
-
-#ifdef CONFIG_KSU_SUSFS
-#ifndef KERNEL_SU_DOMAIN
-#define KERNEL_SU_DOMAIN "u:r:su:s0"
-#endif
-#ifndef KERNEL_INIT_DOMAIN
-#define KERNEL_INIT_DOMAIN "u:r:init:s0"
-#endif
-#ifndef KERNEL_ZYGOTE_DOMAIN
-#define KERNEL_ZYGOTE_DOMAIN "u:r:zygote:s0"
-#endif
-u32 susfs_ksu_sid = 0;
-u32 susfs_init_sid = 0;
-u32 susfs_zygote_sid = 0;
-static inline void susfs_set_sid(const char *secctx_name, u32 *out_sid)
-{
-	int err;
-	if (!secctx_name || !out_sid) { pr_err("secctx_name || out_sid is NULL\n"); return; }
-	err = security_secctx_to_secid(secctx_name, strlen(secctx_name), out_sid);
-	if (err) { pr_err("failed setting sid for '%s', err: %d\n", secctx_name, err); return; }
-}
-bool susfs_is_sid_equal(void *sec, u32 sid2) {
-	struct task_security_struct *tsec = (struct task_security_struct *)sec;
-	if (!tsec) return false;
-	return tsec->sid == sid2;
-}
-u32 susfs_get_sid_from_name(const char *secctx_name) {
-	u32 out_sid = 0; int err;
-	if (!secctx_name) return 0;
-	err = security_secctx_to_secid(secctx_name, strlen(secctx_name), &out_sid);
-	if (err) return 0;
-	return out_sid;
-}
-u32 susfs_get_current_sid(void) { return current_sid(); }
-void susfs_set_zygote_sid(void) { susfs_set_sid(KERNEL_ZYGOTE_DOMAIN, &susfs_zygote_sid); }
-bool susfs_is_current_zygote_domain(void) { return unlikely(current_sid() == susfs_zygote_sid); }
-void susfs_set_ksu_sid(void) { susfs_set_sid(KERNEL_SU_DOMAIN, &susfs_ksu_sid); }
-bool susfs_is_current_ksu_domain(void) { return unlikely(current_sid() == susfs_ksu_sid); }
-void susfs_set_init_sid(void) { susfs_set_sid(KERNEL_INIT_DOMAIN, &susfs_init_sid); }
-bool susfs_is_current_init_domain(void) { return unlikely(current_sid() == susfs_init_sid); }
-#endif
-EOF
-          fi
+          if ! grep -q 'susfs_set_ksu_sid' "$SX"; then echo "CiNpZmRlZiBDT05GSUdfS1NVX1NVU0ZTCiNpZm5kZWYgS0VSTkVMX1NVX0RPTUFJTgojZGVmaW5lIEtFUk5FTF9TVV9ET01BSU4gInU6cjpzdTpzMCIKI2VuZGlmCiNpZm5kZWYgS0VSTkVMX0lOSVRfRE9NQUlOCiNkZWZpbmUgS0VSTkVMX0lOSVRfRE9NQUlOICJ1OnI6aW5pdDpzMCIKI2VuZGlmCiNpZm5kZWYgS0VSTkVMX1pZR09URV9ET01BSU4KI2RlZmluZSBLRVJORUxfWllHT1RFX0RPTUFJTiAidTpyOnp5Z290ZTpzMCIKI2VuZGlmCnUzMiBzdXNmc19rc3Vfc2lkID0gMDsKdTMyIHN1c2ZzX2luaXRfc2lkID0gMDsKdTMyIHN1c2ZzX3p5Z290ZV9zaWQgPSAwOwpzdGF0aWMgaW5saW5lIHZvaWQgc3VzZnNfc2V0X3NpZChjb25zdCBjaGFyICpzZWNjdHhfbmFtZSwgdTMyICpvdXRfc2lkKQp7CglpbnQgZXJyOwoJaWYgKCFzZWNjdHhfbmFtZSB8fCAhb3V0X3NpZCkgeyBwcl9lcnIoInNlY2N0eF9uYW1lIHx8IG91dF9zaWQgaXMgTlVMTFxuIik7IHJldHVybjsgfQoJZXJyID0gc2VjdXJpdHlfc2VjY3R4X3RvX3NlY2lkKHNlY2N0eF9uYW1lLCBzdHJsZW4oc2VjY3R4X25hbWUpLCBvdXRfc2lkKTsKCWlmIChlcnIpIHsgcHJfZXJyKCJmYWlsZWQgc2V0dGluZyBzaWQgZm9yICclcycsIGVycjogJWRcbiIsIHNlY2N0eF9uYW1lLCBlcnIpOyByZXR1cm47IH0KfQpib29sIHN1c2ZzX2lzX3NpZF9lcXVhbCh2b2lkICpzZWMsIHUzMiBzaWQyKSB7CglzdHJ1Y3QgdGFza19zZWN1cml0eV9zdHJ1Y3QgKnRzZWMgPSAoc3RydWN0IHRhc2tfc2VjdXJpdHlfc3RydWN0ICopc2VjOwoJaWYgKCF0c2VjKSByZXR1cm4gZmFsc2U7CglyZXR1cm4gdHNlYy0+c2lkID09IHNpZDI7Cn0KdTMyIHN1c2ZzX2dldF9zaWRfZnJvbV9uYW1lKGNvbnN0IGNoYXIgKnNlY2N0eF9uYW1lKSB7Cgl1MzIgb3V0X3NpZCA9IDA7IGludCBlcnI7CglpZiAoIXNlY2N0eF9uYW1lKSByZXR1cm4gMDsKCWVyciA9IHNlY3VyaXR5X3NlY2N0eF90b19zZWNpZChzZWNjdHhfbmFtZSwgc3RybGVuKHNlY2N0eF9uYW1lKSwgJm91dF9zaWQpOwoJaWYgKGVycikgcmV0dXJuIDA7CglyZXR1cm4gb3V0X3NpZDsKfQp1MzIgc3VzZnNfZ2V0X2N1cnJlbnRfc2lkKHZvaWQpIHsgcmV0dXJuIGN1cnJlbnRfc2lkKCk7IH0Kdm9pZCBzdXNmc19zZXRfenlnb3RlX3NpZCh2b2lkKSB7IHN1c2ZzX3NldF9zaWQoS0VSTkVMX1pZR09URV9ET01BSU4sICZzdXNmc196eWdvdGVfc2lkKTsgfQpib29sIHN1c2ZzX2lzX2N1cnJlbnRfenlnb3RlX2RvbWFpbih2b2lkKSB7IHJldHVybiB1bmxpa2VseShjdXJyZW50X3NpZCgpID09IHN1c2ZzX3p5Z290ZV9zaWQpOyB9CnZvaWQgc3VzZnNfc2V0X2tzdV9zaWQodm9pZCkgeyBzdXNmc19zZXRfc2lkKEtFUk5FTF9TVV9ET01BSU4sICZzdXNmc19rc3Vfc2lkKTsgfQpib29sIHN1c2ZzX2lzX2N1cnJlbnRfa3N1X2RvbWFpbih2b2lkKSB7IHJldHVybiB1bmxpa2VseShjdXJyZW50X3NpZCgpID09IHN1c2ZzX2tzdV9zaWQpOyB9CnZvaWQgc3VzZnNfc2V0X2luaXRfc2lkKHZvaWQpIHsgc3VzZnNfc2V0X3NpZChLRVJORUxfSU5JVF9ET01BSU4sICZzdXNmc19pbml0X3NpZCk7IH0KYm9vbCBzdXNmc19pc19jdXJyZW50X2luaXRfZG9tYWluKHZvaWQpIHsgcmV0dXJuIHVubGlrZWx5KGN1cnJlbnRfc2lkKCkgPT0gc3VzZnNfaW5pdF9zaWQpOyB9CiNlbmRpZgo=" | base64 -d >> "$SX"; fi
           grep -n "susfs_set_ksu_sid\|susfs_is_current_ksu_domain" "$SX" | head
           find . -name '*.rej' -print -exec sed -n '1,5p' {} \; 2>/dev/null | head -40 || true
 
