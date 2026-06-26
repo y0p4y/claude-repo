@@ -99,10 +99,12 @@ jobs:
           sed -i '/eval .*POST_DEFCONFIG_CMDS/c\POST_DEFCONFIG_CMDS=true' build/build.sh
           echo "after:"; grep -nE "POST_DEFCONFIG_CMDS" build/build.sh | head
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
-          # BISECTION: KSU only, SuSFS DISABLED. All susfs code (selinux defs/calls/stub, fs hooks) is
-          # #ifdef CONFIG_KSU_SUSFS-guarded, so with it off none of it compiles -> pure KSU+base build.
-          # If this BOOTS -> SuSFS was the bootloop cause. If it bootloops -> KSU/base/build is the cause.
-          for c in CONFIG_KSU=y CONFIG_TMPFS_XATTR=y; do echo "$c" >> "$DC"; done
+          # DIAGNOSTIC run#19: PLAIN 4.19.224 — no KSU, no SuSFS. All KSU/susfs code is #ifdef CONFIG_KSU
+          # /CONFIG_KSU_SUSFS-guarded, so off => clean stock-equivalent rebuild from the pinned commit.
+          # BOOTS -> build reproduces stock ABI; KSU breaks the module CRCs. BOOTLOOP -> build env can't
+          # match Google's exact ABI (modversions CRC) at all -> custom-kernel path blocked on this device.
+          for c in CONFIG_TMPFS_XATTR=y; do echo "$c" >> "$DC"; done
+          echo "# CONFIG_KSU is not set" >> "$DC"
           echo "# CONFIG_KSU_SUSFS is not set" >> "$DC"
           echo "--- tail defconfig ---"; tail -12 "$DC"
 
