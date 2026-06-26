@@ -32,6 +32,20 @@ jobs:
           git config --global user.email ci@local; git config --global user.name ci
           repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }}
           repo sync -j$(nproc) -c --no-tags --no-clone-bundle
+          # === PIN to the device's EXACT kernel commit ===
+          # Device SQ3A.220705.003.A1 runs 4.19.224-g9e23c2625924-ab8577203; vendor /vendor/lib/modules/*.ko are
+          # vermagic-locked to it. The branch tip is the stale 4.19.191 (Sep 2021) -> wrong version -> modules
+          # rejected -> BOOTLOOP. Fetch+checkout the device commit (it's newer than branch tip, fetch by SHA).
+          cd private/msm-google
+          DEV_SHA=9e23c2625924
+          git fetch --depth=1 origin "$DEV_SHA" 2>/dev/null && git checkout -q FETCH_HEAD || {
+            echo "fetch-by-sha failed; unshallowing full history"; git fetch --unshallow 2>/dev/null || git fetch --depth=20000 origin; git checkout -q "$DEV_SHA"; }
+          KV=$(make kernelversion 2>/dev/null); echo "kernelversion=$KV"; git --no-pager log -1 --oneline || true
+          case "$KV" in 4.19.224) echo "OK pinned 4.19.224";; *) echo "::error::expected 4.19.224 got '$KV' (commit $DEV_SHA not checked out) — aborting"; exit 1;; esac
+          # Force vermagic EXACTLY 4.19.224-g9e23c2625924-ab8577203 so KSU/SuSFS edits don't make it -dirty and
+          # the string matches the vendor .ko vermagic (setlocalversion uses .scmversion verbatim).
+          printf -- '-g9e23c2625924-ab8577203' > .scmversion
+          cd "$HOME/android-kernel"
           echo "KROOT=$HOME/android-kernel/private/msm-google" >> $GITHUB_ENV
 
       - name: Integrate KernelSU (classic v0.9.5, non-GKI) + verify wiring
