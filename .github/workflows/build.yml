@@ -99,10 +99,11 @@ jobs:
           sed -i '/eval .*POST_DEFCONFIG_CMDS/c\POST_DEFCONFIG_CMDS=true' build/build.sh
           echo "after:"; grep -nE "POST_DEFCONFIG_CMDS" build/build.sh | head
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
-          for c in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_SUS_PATH=y CONFIG_KSU_SUSFS_SUS_MOUNT=y \
-                   CONFIG_KSU_SUSFS_TRY_UMOUNT=y CONFIG_KSU_SUSFS_SPOOF_UNAME=y CONFIG_KSU_SUSFS_SUS_KSTAT=y \
-                   CONFIG_KSU_SUSFS_SPOOF_PROC_CMDLINE=y CONFIG_KSU_SUSFS_OPEN_REDIRECT=y CONFIG_TMPFS_XATTR=y; do
-            echo "$c" >> "$DC"; done
+          # BISECTION: KSU only, SuSFS DISABLED. All susfs code (selinux defs/calls/stub, fs hooks) is
+          # #ifdef CONFIG_KSU_SUSFS-guarded, so with it off none of it compiles -> pure KSU+base build.
+          # If this BOOTS -> SuSFS was the bootloop cause. If it bootloops -> KSU/base/build is the cause.
+          for c in CONFIG_KSU=y CONFIG_TMPFS_XATTR=y; do echo "$c" >> "$DC"; done
+          echo "# CONFIG_KSU_SUSFS is not set" >> "$DC"
           echo "--- tail defconfig ---"; tail -12 "$DC"
 
       - name: Build
