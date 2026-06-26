@@ -71,10 +71,7 @@ jobs:
         run: |
           cd $HOME/android-kernel
           DC="$KROOT/arch/arm64/configs/redbull_defconfig"
-          # disable the KMI/ABI symbol-list enforcement (post-build compare aborts on our KSU/SuSFS symbol changes)
-          for bc in $(grep -rlE "TRIM_NONLISTED_KMI|KMI_SYMBOL_LIST|ABI_DEFINITION" $HOME/android-kernel 2>/dev/null); do
-            sed -i -E 's/^(TRIM_NONLISTED_KMI=).*/\1/; s/^(KMI_SYMBOL_LIST=).*/\1/; s/^(ADDITIONAL_KMI_SYMBOL_LISTS=).*/\1/; s/^(ABI_DEFINITION=).*/\1/' "$bc"
-          done
+          # (KMI/ABI post-build compare is tolerated via continue-on-error on the Build step; image is produced before it runs)
           # disable LTO properly (it's a kconfig choice) to avoid OOM at vmlinux link
           sed -i 's/^CONFIG_LTO_CLANG=y/# CONFIG_LTO_CLANG is not set/' "$DC"
           sed -i 's/^CONFIG_LTO=y/# CONFIG_LTO is not set/' "$DC"
